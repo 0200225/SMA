@@ -1,0 +1,12 @@
+# Secrets
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+
+# ????/????????
+tts_test.mp3
