@@ -102,9 +102,9 @@
 <script>
 (() => {
   /* ===== إعدادات ===== */
-  const API_BASE = "http://127.0.0.1:8181";
+   const API_BASE = "https://sma-backend-26bq.onrender.com";
   const VOICE   = "ar-MA-MounaNeural";
-  const LANG    = "ar";
+  const LANG    = "ar-MA";   // ✅ كان "ar"
 
   const orb   = document.getElementById('orb');
   const cta   = document.getElementById('cta');
@@ -250,7 +250,10 @@
     let peak=0; for(let i=0;i<buf.length;i++){ const v=Math.abs(buf[i]-128)/128; if(v>peak) peak=v; }
     const scale = 1 + Math.min(peak*0.15, 0.08);
     orb.style.transform = `scale(${scale.toFixed(3)})`;
-    const TH=0.015, WINDOW=1100;
+    // داخل checkSilence()
+const TH = 0.012;   // كان 0.015
+const WINDOW = 800; // كان 1100ms
+;
     if (peak<TH) silenceMs+=60; else silenceMs=0;
     if (silenceMs>WINDOW) stopListening();
   }

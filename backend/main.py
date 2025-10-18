@@ -51,18 +51,24 @@ class AskTTS(BaseModel):
 def root():
     return {"status": "running", "service": "smart-garden-assistant"}
 
+# ... أعلى الملف كما هو
+
 @app.get("/health")
 def health():
     return {"ok": True}
 
-# --------- كتابة → صوت ---------
+# ✅ دعم HEAD لـ /health (لـ UptimeRobot وغيرها)
+@app.head("/health")
+def health_head():
+    from fastapi import Response
+    return Response(status_code=200)
+
 # --------- كتابة → صوت ---------
 @app.post("/ask_tts", summary="Ask TTS")
 async def ask_tts(payload: AskTTS):
     try:
         q = (payload.query or "").strip()
 
-        # الحارس: static أولاً ثم LLM كـ fallback
         ok, msg = guard_query_static(q)
         if not ok and guard_query_llm:
             ok, msg = guard_query_llm(q)
@@ -72,12 +78,11 @@ async def ask_tts(payload: AskTTS):
             headers = {"Content-Disposition": f'inline; filename="reject-{uuid.uuid4().hex}.mp3"'}
             return Response(content=audio, media_type="audio/mpeg", headers=headers)
 
-        # إجابة النص
+        # ✅ مرّر لغة الواجهة للـLLM
         text = (answer(q, payload.lang) or "").strip()
         if not text:
             text = "لم أتمكن من توليد إجابة الآن."
 
-        # تحويل الإجابة إلى صوت
         try:
             audio = await synthesize_tts(text, payload.voice)
         except Exception:
@@ -92,43 +97,34 @@ async def ask_tts(payload: AskTTS):
         print("FATAL /ask_tts ERROR:\n", traceback.format_exc())
         return JSONResponse(status_code=500, content={"error": "internal_error"})
 
-# --------- تسجيل صوتي (WebM/Opus) → نص → إجابة → صوت ---------
-# ملاحظة: يتطلّب حزمة python-multipart لكي تعمل UploadFile
-# ثبّت: pip install python-multipart
-@app.post(
-    "/ask_voice",
-    summary="Voice → STT → LLM → TTS",
-    description="استقبل ملف صوتي (webm/opus) من المتصفح وأعد MP3 بالإجابة.",
-)
+# --------- صوت → نص → LLM → صوت ---------
+@app.post("/ask_voice", summary="Voice → STT → LLM → TTS",
+          description="استقبل webm/opus وأعد MP3.")
 async def ask_voice(
     audio: UploadFile = File(..., description="ملف webm/opus باسم الحقل audio"),
     lang: str = Form("ar"),
     voice: str = Form("ar-MA-MounaNeural"),
 ):
     try:
-        # 1) STT
         blob = await audio.read()
         lang_hint = lang.split("-")[0] if "-" in lang else lang
         text_in = (transcribe_webm_bytes(blob, lang_hint=lang_hint) or "").strip()
         if not text_in:
             text_in = "لم أفهم التسجيل الصوتي."
 
-        # 2) الحارس: static ثم LLM
         ok, msg = guard_query_static(text_in)
         if not ok and guard_query_llm:
             ok, msg = guard_query_llm(text_in)
-
         if not ok:
             mp3 = await synthesize_tts(msg, voice)
             headers = {"Content-Disposition": f'inline; filename="reject-{uuid.uuid4().hex}.mp3"'}
             return Response(content=mp3, media_type="audio/mpeg", headers=headers)
 
-        # 3) توليد الرد
-        reply = (answer(text_in, "ar") or "").strip()
+        # ✅ مرّر لغة الواجهة كما هي (مثلاً ar-MA)
+        reply = (answer(text_in, lang) or "").strip()
         if not reply:
             reply = "تعذّر توليد إجابة حالياً."
 
-        # 4) تحويل الرد إلى صوت
         mp3 = await synthesize_tts(reply, voice)
         headers = {"Content-Disposition": f'inline; filename="reply-{uuid.uuid4().hex}.mp3"'}
         return Response(content=mp3, media_type="audio/mpeg", headers=headers)
