@@ -1,0 +1,11 @@
+.git
+frontend/
+addons/
+deploy/
+**/__pycache__/
+*.pyc
+*.mp3
+*.wav
+*.webm
+backend/.venv/
+backend/__pycache__/
