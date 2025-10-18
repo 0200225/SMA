@@ -54,6 +54,7 @@ FEWSHOT: List[dict] = [
      "قص الأوراق لي فيها إصابة كثيرة، وتهويّة مزيانة للنبات. "
      "نقص السقي على الأوراق وسقي من الجدر. تقدر ترش محلول بيكاربونات خفيف "
      "أو كبريت زراعي بتركيز مناسب مرة فالأسبوع حتى يتحسّن الوضع."}
+     
 
 
 ]
@@ -84,6 +85,51 @@ def normalize_to_msa(text: str) -> str:
         return _cleanup(r.choices[0].message.content or "")
     except Exception:
         return text  # لو حصل خطأ، نرجّع النص كما هو
+# ==== Darija normalizer & slot extractor ==================================
+import re, unicodedata
+
+def _norm(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = unicodedata.normalize("NFKC", s)
+    s = re.sub(r"[\u064B-\u0652\u0670\u0640]", "", s)   # حذف الحركات والتطويل
+    s = s.replace("أ","ا").replace("إ","ا").replace("آ","ا").replace("ة","ه")
+    return re.sub(r"\s+"," ", s)
+
+# دارجة/فرنساعرابي → فصحى (أهم المزروعات الشائعة)
+DARija_CROP = {
+    "مطيشه": "طماطم", "مطيشة": "طماطم", "طوماط": "طماطم", "tomate": "طماطم",
+    "خيزو": "جزر", "زروديه": "جزر", "زرودية": "جزر", "carotte": "جزر",
+    "بصله": "بصل", "بصلة": "بصل", "oignon": "بصل",
+    "بطاطا": "بطاطس", "patate": "بطاطس", "pomme de terre": "بطاطس",
+    "فلفله": "فلفل", "فلفلة": "فلفل", "poivron": "فلفل",
+    "بادنجان": "باذنجان", "beringelle": "باذنجان", "aubergine": "باذنجان",
+    "قزبر": "كزبرة", "معندس": "بقدونس", "نعناع": "نعناع",
+    "قرعه": "كوسة", "كورجيت": "كوسة", "courgette": "كوسة",  # لو قصد اليقطين نعدّله لاحقًا
+}
+
+INTENT_KWS = {
+    "الزراعة": ["نزرع","زرع","غرس","شتل","كيفاش نغرس","كيف نزرع","طريقة الزراعة"],
+    "السقي": ["نسقي","سقي","ري","الماء","اشحال نسقي","متى نسقي"],
+    "التسميد": ["نسمد","سماد","تغذية","كمبوست","نيم"],
+    "الآفات": ["حشرة","حشرات","دوده","قمل","ذبابة","عنكبوت","مرض","بياض","بقع"],
+    "الحصاد": ["نجني","حصد","حصد","وقت الجني"],
+}
+
+def extract_slots(text: str):
+    t = _norm(text)
+    crop = None
+    # ابحث عن محصول
+    for k,v in DARija_CROP.items():
+        if _norm(k) in t:
+            crop = v
+            break
+    # ابحث عن نية السؤال
+    intent = None
+    for name, kws in INTENT_KWS.items():
+        if any(_norm(w) in t for w in kws):
+            intent = name
+            break
+    return crop, intent
 
 def _cleanup(text: str) -> str:
     """فقرة واحدة، بلا مقدمات/تعداد."""
@@ -95,9 +141,37 @@ def _cleanup(text: str) -> str:
     return t
 
 def answer(query: str, lang: str = "ar") -> str:
-    """يُجيب دائمًا من منظور بيئي/بستاني قدر الإمكان؛ يعتذر بجملة واحدة فقط إذا استحال التأطير."""
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT}, *FEWSHOT,
-            {"role": "user", "content": query.strip()}]
+    """
+    يجيب دائمًا من منظور البستنة/البيئة، مع تطبيع الدارجة واستخراج (محصول/نية)
+    لزيادة الدقة وتقليل التوهان.
+    """
+    # 1) طَبِّع الدارجة إلى فصحى موجزة
+    try:
+        q_norm = normalize_to_msa(query)  # من الدالة التي عندنا مسبقًا
+    except Exception:
+        q_norm = query
+
+    # 2) استخرج المحصول والنية من النص الأصلي (قبل/بعد التطبيع لنزيد الاحتمال)
+    crop, intent = extract_slots(query)
+    if not crop or not intent:
+        c2, i2 = extract_slots(q_norm)
+        crop = crop or c2
+        intent = intent or i2
+
+    # 3) ابني توجيهًا مقيدًا إن وُجدت سلوتس
+    extra = []
+    if crop:
+        extra.append(f"المحصول المستهدف: {crop}.")
+    if intent:
+        extra.append(f"نية السؤال: {intent}.")
+    extra_text = ("\n" + " ".join(extra)) if extra else ""
+
+    msgs = [
+        {"role": "system", "content": SYSTEM_PROMPT + extra_text},
+        *FEWSHOT,
+        {"role": "user", "content": q_norm.strip() or query.strip()},
+    ]
+
     try:
         r = client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -106,8 +180,7 @@ def answer(query: str, lang: str = "ar") -> str:
             max_tokens=380,
             top_p=1.0,
         )
-        text = _cleanup(r.choices[0].message.content or "")
-        return text
+        return _cleanup(r.choices[0].message.content or "")
     except RateLimitError:
         return "لا يمكن توليد الإجابة مؤقتًا بسبب حدود الاستخدام، حاول بعد قليل."
     except APIError as e:
