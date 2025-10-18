@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+openai>=1.30.0
+edge-tts
+faster-whisper>=1.0.0
+python-multipart

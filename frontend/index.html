@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>الحديقة الذكية – محادثة صوتية</title>
+<style>
+  :root{
+    --ink:#0b3d2c;         /* أخضر غامق */
+    --pill:#0f5132;
+    --ring:#cfe2d7;
+    --danger:#b3261e;
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Arabic",Arial}
+  body{
+    background:#eef6ef url("./background-plants.jpg") center/cover fixed no-repeat;
+    backdrop-filter:saturate(.9) contrast(.95);
+  }
+
+  /* تخطيط بسيط */
+  .stage{min-height:100%;display:grid;place-items:center;padding:36px 18px 28px}
+  .center{display:grid;justify-items:center;gap:14px}
+
+  /* الدائرة (مصغّرة ~40%) */
+  .orb-wrap{position:relative;display:grid;place-items:center;aspect-ratio:1/1;width:min(340px,47vw);margin:auto}
+  .orb{
+    width:100%;height:100%;border-radius:50%;
+    background:radial-gradient(110% 110% at 50% 35%, #fff 0%, #f7fbf8 55%, #eef6ef 100%);
+    border:8px solid var(--ring);
+    box-shadow:0 0 0 1px rgba(0,0,0,.03) inset, 0 20px 40px rgba(11,61,44,.10);
+    transform:scale(1);transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  }
+  .orb.pulse{animation:pulse 1.2s ease-in-out infinite}
+  .orb.speak{box-shadow:0 10px 30px rgba(11,61,44,.22), 0 0 0 1px rgba(0,0,0,.02) inset;border-color:#bcd7c9}
+  @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.03)}100%{transform:scale(1)}}
+  .orb-btn{position:absolute;inset:0;display:grid;place-items:center;border:0;background:transparent;cursor:pointer}
+
+  .cta{
+    background:var(--ink);color:#fff;font-weight:800;border:0;border-radius:999px;padding:14px 22px;
+    box-shadow:0 6px 18px rgba(11,61,44,.25);min-width:190px;
+  }
+  .cta[disabled]{opacity:.55;cursor:not-allowed}
+
+  /* الرسائل أسفل الدائرة */
+  .hint{font-size:18px;font-weight:800;color:#fff;text-align:center;min-height:26px;text-shadow:0 2px 6px rgba(0,0,0,.35)}
+  .hint.error{color:#ffd9d9}
+  .status-chip{font-size:12px;color:#fff;background:var(--pill);padding:6px 10px;border-radius:999px}
+  .error{color:var(--danger);font-weight:800}
+
+  /* طبقة الخمول بالفيديو */
+  .idle{position:fixed;inset:0;display:none;place-items:center;background:rgba(255,255,255,.94);z-index:30;backdrop-filter:blur(2px)}
+  .idle.active{display:grid}
+  .idle-box{width:min(920px,92vw);background:#fff;border-radius:20px;border:1px solid rgba(0,0,0,.06);overflow:hidden}
+  .idle-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#f2f7f4}
+  .idle video{width:100%;height:auto;display:block;background:#000}
+  .idle .tips{padding:12px 16px;font-size:14px;color:#234}
+  .close{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:8px 12px;cursor:pointer;font-weight:700}
+  .idle-audio{background:#fff;color:#0b3d2c;border:1px solid rgba(0,0,0,.15);border-radius:10px;padding:8px 12px;cursor:pointer;font-weight:700}
+  .idle-audio.active{background:#0b3d2c;color:#fff}
+
+  /* توست بسيط */
+  .toast{position:fixed;bottom:18px;right:18px;background:#fff;border:1px solid rgba(0,0,0,.1);
+    box-shadow:0 10px 30px rgba(0,0,0,.1);border-radius:12px;padding:10px 14px;font-size:13px;display:none;z-index:50}
+  .toast.show{display:block}
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="center" id="app">
+      <div class="status-chip" id="chip">جاهز</div>
+
+      <div class="orb-wrap">
+        <div class="orb" id="orb"></div>
+        <button class="orb-btn" id="orbBtn" aria-label="زر المحادثة">
+          <span class="cta" id="cta">ابدأ المحادثة</span>
+        </button>
+      </div>
+
+      <div class="hint" id="hint">اضغط وابدأ التحدث… سيتوقف تلقائيًا عند الصمت.</div>
+      <audio id="player" hidden></audio>
+    </div>
+  </div>
+
+  <!-- طبقة الخمول (نسخة واحدة فقط) -->
+  <div class="idle" id="idle" aria-hidden="true">
+    <div class="idle-box">
+      <div class="idle-head">
+        <div><strong>تعرّف على المساعد</strong></div>
+        <div class="idle-actions" style="display:flex;gap:8px;align-items:center">
+          <button class="idle-audio" id="idleAudio">🔇 تشغيل الصوت</button>
+          <button class="close" id="idleClose">إغلاق</button>
+        </div>
+      </div>
+      <video id="idleVid" autoplay muted playsinline></video>
+
+      <div class="tips">نصيحة: اسأل بصيغة محددة مثل “ما أفضل ريّ للطماطم في الأصيص؟”.</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  /* ===== إعدادات ===== */
+  const API_BASE = "http://127.0.0.1:8181";
+  const VOICE   = "ar-MA-MounaNeural";
+  const LANG    = "ar";
+
+  const orb   = document.getElementById('orb');
+  const cta   = document.getElementById('cta');
+  const orbBtn= document.getElementById('orbBtn');
+  const hint  = document.getElementById('hint');
+  const chip  = document.getElementById('chip');
+  const player= document.getElementById('player');
+
+  const toast = document.getElementById('toast');
+
+  /* ===== عناصر طبقة الخمول ===== */
+  const IDLE_VIDEOS = ["idle/intro1.mp4","idle/intro2.mp4","idle/intro3.mp4"];
+  const idleEl       = document.getElementById('idle');
+  const idleVid      = document.getElementById('idleVid');
+  const idleClose    = document.getElementById('idleClose');
+  const idleAudioBtn = document.getElementById('idleAudio');
+
+  const IDLE_MS = 2*60*1000;
+  let lastInteractAt = Date.now();
+  let idleIndex = 0;
+  let userInteracted = false;
+  let wantIdleAudio = JSON.parse(localStorage.getItem('idle_audio_on') || 'false');
+
+  const markInteract = ()=>{ lastInteractAt = Date.now(); userInteracted = true; };
+  document.addEventListener('pointerdown', markInteract);
+  document.addEventListener('keydown', markInteract);
+
+  function syncIdleAudioBtn(){
+    idleAudioBtn.classList.toggle('active', wantIdleAudio);
+    idleAudioBtn.textContent = wantIdleAudio ? '🔊 كتم الصوت' : '🔇 تشغيل الصوت';
+  }
+  function enableIdleSound(){
+    idleVid.muted = false; idleVid.volume = 1.0;
+    idleVid.play().catch(()=>{});
+    wantIdleAudio = true;
+    localStorage.setItem('idle_audio_on','true');
+    syncIdleAudioBtn();
+  }
+  function disableIdleSound(){
+    idleVid.muted = true;
+    wantIdleAudio = false;
+    localStorage.setItem('idle_audio_on','false');
+    syncIdleAudioBtn();
+  }
+  idleAudioBtn.addEventListener('click', ()=> wantIdleAudio ? disableIdleSound() : enableIdleSound());
+  syncIdleAudioBtn();
+
+  function loadIdleVideo(i){
+    idleIndex = (i + IDLE_VIDEOS.length) % IDLE_VIDEOS.length;
+    idleVid.src = IDLE_VIDEOS[idleIndex];
+    idleVid.play().catch(()=>{});
+  }
+  function showIdle(){
+    idleEl.classList.add('active');
+    if (wantIdleAudio && userInteracted) enableIdleSound(); else { idleVid.muted = true; syncIdleAudioBtn(); }
+    loadIdleVideo(idleIndex);
+  }
+  function hideIdle(){
+    if (!idleEl.classList.contains('active')) return;
+    try{ idleVid.pause(); }catch{}
+    idleEl.classList.remove('active');
+  }
+  idleClose.addEventListener('click', hideIdle);
+
+  // فحص الخمول دوريًا
+  setInterval(()=>{ if(Date.now()-lastInteractAt>IDLE_MS && !idleEl.classList.contains('active')) showIdle(); }, 5000);
+
+  // انتقال تلقائي للفيديو التالي عند الانتهاء
+  idleVid.addEventListener('ended', () => {
+    loadIdleVideo(idleIndex + 1);
+    // أعد تفعيل الصوت تلقائيًا إن كان المستخدم يريده وقد تفاعل مع الصفحة
+    if (wantIdleAudio && userInteracted){ idleVid.muted = false; idleVid.play().catch(()=>{}); }
+  });
+
+  /* ===== واجهة وحالات ===== */
+  function setChip(text, danger=false){ chip.textContent = text; chip.style.background = danger ? '#a91919' : 'var(--pill)'; }
+  function setHint(text, isErr=false){ hint.textContent = text; hint.classList.toggle('error', !!isErr); }
+  function toastMsg(msg){ toast.textContent = msg; toast.classList.add('show'); setTimeout(()=>toast.classList.remove('show'), 3000); }
+
+  function setState(state){
+    switch(state){
+      case 'ready':
+        listening=false; orb.classList.remove('pulse','speak'); orb.style.transform='scale(1)';
+        cta.textContent='ابدأ المحادثة'; setChip('جاهز');
+        setHint('اضغط وابدأ التحدث… سيتوقف تلقائيًا عند الصمت.');
+        break;
+      case 'listen':
+        orb.classList.add('pulse'); orb.classList.remove('speak');
+        cta.textContent='يتسجّل… اضغط للإيقاف'; setChip('يستمع الآن'); setHint('تحدث الآن…');
+        break;
+      case 'process':
+        orb.classList.remove('pulse','speak'); cta.textContent='جارٍ المعالجة…';
+        setChip('معالجة'); setHint('يتم إرسال التسجيل ومعالجته…');
+        break;
+      case 'speak':
+        orb.classList.add('speak'); orb.classList.remove('pulse');
+        cta.textContent='يتحدث…'; setChip('يتحدث'); setHint('تشغيل الإجابة…');
+        break;
+      case 'error':
+        listening=false; orb.classList.remove('pulse','speak');
+        cta.textContent='ابدأ المحادثة'; setChip('خطأ', true);
+        break;
+    }
+  }
+
+  function resetAudioGraph(){
+    try{ srcNode && srcNode.disconnect(); analyser && analyser.disconnect(); audioCtx && audioCtx.close(); }catch{}
+    srcNode=analyser=audioCtx=null;
+  }
+
+  /* ===== الاستماع ===== */
+  let mediaStream=null, mediaRec=null, chunks=[];
+  let audioCtx=null, analyser=null, srcNode=null;
+  let listenTimer=null, silenceMs=0, listening=false;
+
+  async function startListening(){
+    try{
+      markInteract(); hideIdle();
+
+      mediaStream = await navigator.mediaDevices.getUserMedia({audio:true});
+      chunks = [];
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      mediaRec = new MediaRecorder(mediaStream, {mimeType:mime});
+      mediaRec.ondataavailable = (e)=>{ if(e.data.size>0) chunks.push(e.data); };
+      mediaRec.onstop = onStopRecording;
+      mediaRec.start();
+
+      audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      srcNode = audioCtx.createMediaStreamSource(mediaStream);
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024; srcNode.connect(analyser);
+      silenceMs = 0; if (listenTimer) clearInterval(listenTimer); listenTimer = setInterval(checkSilence, 60);
+
+      setState('listen');
+    }catch(err){
+      console.error(err);
+      setState('error'); setHint('تعذّر الوصول للميكروفون.', true); toastMsg('الميكروفون غير متاح أو تم رفض الإذن.');
+    }
+  }
+
+  function checkSilence(){
+    const buf = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(buf);
+    let peak=0; for(let i=0;i<buf.length;i++){ const v=Math.abs(buf[i]-128)/128; if(v>peak) peak=v; }
+    const scale = 1 + Math.min(peak*0.15, 0.08);
+    orb.style.transform = `scale(${scale.toFixed(3)})`;
+    const TH=0.015, WINDOW=1100;
+    if (peak<TH) silenceMs+=60; else silenceMs=0;
+    if (silenceMs>WINDOW) stopListening();
+  }
+
+  function stopListening(){
+    try{
+      if (listenTimer){ clearInterval(listenTimer); listenTimer=null; }
+      if (mediaRec && mediaRec.state!=='inactive'){ mediaRec.stop(); }
+      if (mediaStream){ mediaStream.getTracks().forEach(t=>t.stop()); mediaStream=null; }
+      resetAudioGraph(); setState('process');
+    }catch{}
+  }
+
+  async function onStopRecording(){
+    try{
+      const blob = new Blob(chunks, {type: mediaRec?.mimeType || "audio/webm"});
+      await sendToBackend(blob);
+    }catch(err){
+      console.error(err);
+      setState('error'); setHint('حدث خطأ أثناء الإرسال/المعالجة.', true); toastMsg('تعذر إكمال الطلب.');
+    }
+  }
+
+  async function sendToBackend(audioBlob){
+    const fd = new FormData();
+    fd.append("audio", audioBlob, "clip.webm");
+    fd.append("lang", LANG);
+    fd.append("voice", VOICE);
+    const res = await fetch(`${API_BASE}/ask_voice`, { method:"POST", body: fd });
+    if (!res.ok){ setState('error'); setHint(`خطأ HTTP ${res.status}`, true); throw new Error('HTTP '+res.status); }
+    const mp3 = await res.blob();
+    await speakBlob(mp3);
+  }
+
+  async function speakBlob(blob){
+    try{
+      const url = URL.createObjectURL(blob);
+      player.src = url; setState('speak');
+      await player.play().catch(()=>{});
+      player.onended = () => { URL.revokeObjectURL(url); setState('ready'); };
+    }catch(err){
+      console.error(err);
+      setState('error'); setHint('تعذر تشغيل الصوت.', true); toastMsg('تعذر تشغيل الصوت.');
+    }
+  }
+
+  /* زر الدائرة */
+  orbBtn.addEventListener('click', async () => {
+    if (!listening){ listening = true; await startListening(); }
+    else { listening = false; stopListening(); }
+  });
+
+  document.addEventListener('visibilitychange', ()=> {
+    if (document.hidden && mediaRec && mediaRec.state==='recording'){ listening=false; stopListening(); }
+  });
+
+  setState('ready');
+})();
+</script>
+
+</body>
+</html>
